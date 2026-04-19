@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id              Int         @id @default(autoincrement())
+  name            String
+  slug            String      @unique
+  sku             String      @unique
+  description     String      @db.Text
+  collection      String
+  metal           String
+  gemstone        String?
+  caratWeight     Decimal?    @db.Decimal(5, 2)
+  price           Int
+  makingCharge    Int         @default(0)
+  discountPercent Int         @default(0)
+  stock           Int         @default(0)
+  media           Json
+  featured        Boolean     @default(false)
+  active          Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  orderItems      OrderItem[]
+
+  @@index([active, collection])
+  @@index([collection, featured])
+}
+
+model Order {
+  id              Int         @id @default(autoincrement())
+  orderNumber     String      @unique
+  customerName    String
+  email           String
+  phone           String
+  shippingAddress Json
+  subtotal        Int
+  shippingFee     Int
+  total           Int
+  status          OrderStatus @default(PENDING)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  items           OrderItem[]
+
+  @@index([status])
+}
+
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  orderId   Int
+  productId Int
+  quantity  Int
+  unitPrice Int
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FULFILLED
+  CANCELLED
+}
