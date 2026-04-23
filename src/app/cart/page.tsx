@@ -39,6 +39,10 @@ export default function CartPage() {
                 <div className="flex-1">
                   <p className="text-base font-semibold text-ink">{item.name}</p>
                   <p className="mt-1 text-sm text-ink/60">{formatINR(item.price)}</p>
+                  {item.selectedSize ? <p className="mt-1 text-xs text-ink/55">Size: {item.selectedSize}</p> : null}
+                  {item.engravingText ? (
+                    <p className="mt-1 text-xs text-ink/55">Engraving: {item.engravingText}</p>
+                  ) : null}
 
                   <div className="mt-4 flex items-center justify-between">
                     <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 px-2 py-1">

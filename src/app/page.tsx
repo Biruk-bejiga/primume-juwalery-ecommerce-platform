@@ -5,6 +5,7 @@ import { trustSignals } from "@/lib/constants";
 import { getAllActiveProducts, getFeaturedProducts } from "@/lib/queries";
 
 export const revalidate = 120;
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const [featured, allProducts] = await Promise.all([getFeaturedProducts(6), getAllActiveProducts()]);

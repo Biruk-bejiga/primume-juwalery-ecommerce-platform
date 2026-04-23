@@ -20,7 +20,7 @@ export const navLinks = [
   { label: "Bridal", href: `/collections/${makeSlug("Bridal Rings")}` },
   { label: "Daily Wear", href: `/collections/${makeSlug("Daily Wear")}` },
   { label: "Ethnic", href: `/collections/${makeSlug("Ethnic Bridal")}` },
-  { label: "Admin", href: "/admin" }
+  { label: "Build Your Jewellery", href: "/build-your-jewellery" }
 ];
 
 export const trustSignals = [

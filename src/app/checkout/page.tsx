@@ -18,6 +18,9 @@ type CheckoutState = {
   country: string;
 };
 
+type PaymentProvider = "RAZORPAY" | "STRIPE" | "PAYPAL";
+type PaymentPlan = "FULL" | "EMI" | "PARTIAL";
+
 const initialState: CheckoutState = {
   customerName: "",
   email: "",
@@ -33,12 +36,47 @@ const initialState: CheckoutState = {
 export default function CheckoutPage() {
   const { items, subtotal, clearCart } = useCart();
   const [form, setForm] = useState<CheckoutState>(initialState);
+  const [couponCode, setCouponCode] = useState("");
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>("RAZORPAY");
+  const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>("FULL");
+  const [partialAmount, setPartialAmount] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
+  const [paymentInfo, setPaymentInfo] = useState<string | null>(null);
 
   const shipping = useMemo(() => (subtotal > 100000 ? 0 : 499), [subtotal]);
-  const total = subtotal + shipping;
+  const total = Math.max(0, subtotal + shipping - discountAmount);
+
+  const applyCoupon = async () => {
+    setMessage(null);
+    if (!couponCode.trim()) {
+      setDiscountAmount(0);
+      return;
+    }
+
+    const response = await fetch("/api/coupons/validate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        code: couponCode.trim(),
+        subtotal
+      })
+    });
+
+    const data = (await response.json()) as { message?: string; discountAmount?: number };
+    if (!response.ok) {
+      setDiscountAmount(0);
+      setMessage(data.message || "Coupon could not be applied.");
+      return;
+    }
+
+    setDiscountAmount(data.discountAmount || 0);
+    setMessage(`Coupon applied. You saved ${formatINR(data.discountAmount || 0)}.`);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -71,15 +109,68 @@ export default function CheckoutPage() {
           },
           items: items.map((item) => ({
             productId: item.id,
-            quantity: item.quantity
-          }))
+            quantity: item.quantity,
+            selectedSize: item.selectedSize,
+            engravingText: item.engravingText
+          })),
+          couponCode: couponCode.trim() || undefined,
+          paymentProvider,
+          paymentPlan,
+          partialAmount: partialAmount ? Number(partialAmount) : undefined
         })
       });
 
-      const data = (await response.json()) as { message?: string; orderNumber?: string };
+      const data = (await response.json()) as { message?: string; orderNumber?: string; orderId?: number };
 
       if (!response.ok) {
         throw new Error(data.message || "Could not place order.");
+      }
+
+      if (data.orderId) {
+        const paymentInit = await fetch("/api/payments/initiate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            orderId: data.orderId,
+            provider: paymentProvider,
+            plan: paymentPlan,
+            partialAmount: partialAmount ? Number(partialAmount) : undefined
+          })
+        });
+
+        const initData = (await paymentInit.json()) as {
+          message?: string;
+          paymentTransactionId?: number;
+          gatewayOrderId?: string;
+          amount?: number;
+        };
+
+        if (!paymentInit.ok || !initData.paymentTransactionId) {
+          throw new Error(initData.message || "Payment initialization failed.");
+        }
+
+        const confirm = await fetch("/api/payments/confirm", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            paymentTransactionId: initData.paymentTransactionId,
+            status: paymentPlan === "PARTIAL" ? "PARTIALLY_PAID" : "PAID",
+            gatewayPaymentId: initData.gatewayOrderId,
+            payload: { simulated: true }
+          })
+        });
+
+        if (!confirm.ok) {
+          throw new Error("Payment confirmation failed.");
+        }
+
+        setPaymentInfo(
+          `Payment initiated with ${paymentProvider}. ${paymentPlan === "PARTIAL" ? "Partial payment" : "Full payment"} captured.`
+        );
       }
 
       setOrderNumber(data.orderNumber || null);
@@ -209,6 +300,67 @@ export default function CheckoutPage() {
           />
         </label>
 
+        <div className="rounded-2xl border border-amber-100 bg-amber-50/40 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/60">Payment options</p>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-sm">
+              <span>Gateway</span>
+              <select
+                value={paymentProvider}
+                onChange={(event) => setPaymentProvider(event.target.value as PaymentProvider)}
+                className="w-full rounded-xl border border-amber-200 px-3 py-2"
+              >
+                <option value="RAZORPAY">Razorpay</option>
+                <option value="STRIPE">Stripe</option>
+                <option value="PAYPAL">PayPal</option>
+              </select>
+            </label>
+
+            <label className="space-y-1 text-sm">
+              <span>Payment plan</span>
+              <select
+                value={paymentPlan}
+                onChange={(event) => setPaymentPlan(event.target.value as PaymentPlan)}
+                className="w-full rounded-xl border border-amber-200 px-3 py-2"
+              >
+                <option value="FULL">Full payment</option>
+                <option value="EMI">EMI</option>
+                <option value="PARTIAL">Partial payment</option>
+              </select>
+            </label>
+          </div>
+
+          {paymentPlan === "PARTIAL" ? (
+            <label className="mt-3 block space-y-1 text-sm">
+              <span>Partial amount to pay now</span>
+              <input
+                type="number"
+                min="1000"
+                value={partialAmount}
+                onChange={(event) => setPartialAmount(event.target.value)}
+                className="w-full rounded-xl border border-amber-200 px-3 py-2"
+                placeholder="Enter amount"
+              />
+            </label>
+          ) : null}
+        </div>
+
+        <div className="rounded-2xl border border-amber-100 bg-white p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink/60">Coupon</p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={couponCode}
+              onChange={(event) => setCouponCode(event.target.value.toUpperCase())}
+              placeholder="Enter coupon code"
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 text-sm"
+            />
+            <button type="button" onClick={applyCoupon} className="rounded-xl border border-brand-300 px-4 py-2 text-sm font-semibold text-brand-700">
+              Apply
+            </button>
+          </div>
+        </div>
+
         <button
           type="submit"
           disabled={isSubmitting || !items.length}
@@ -220,6 +372,7 @@ export default function CheckoutPage() {
         {message ? (
           <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-ink/70">{message}</p>
         ) : null}
+        {paymentInfo ? <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{paymentInfo}</p> : null}
       </form>
 
       <aside className="h-fit rounded-3xl border border-amber-100 bg-white p-6">
@@ -244,6 +397,10 @@ export default function CheckoutPage() {
           <div className="flex items-center justify-between">
             <span>Shipping</span>
             <span>{shipping === 0 ? "Free" : formatINR(shipping)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span>Discount</span>
+            <span>- {formatINR(discountAmount)}</span>
           </div>
           <div className="flex items-center justify-between text-base font-semibold text-ink">
             <span>Total</span>

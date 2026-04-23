@@ -1,6 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 
+import { computeCouponDiscount, isCouponActive } from "@/lib/coupon";
+import { getUserIdFromRequest } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { orderPayloadSchema } from "@/lib/validators";
 
@@ -10,8 +12,14 @@ function generateOrderNumber() {
   return `AJ-${epoch}-${random}`;
 }
 
+function generateTrackingId() {
+  const token = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `TRK-${Date.now().toString().slice(-6)}-${token}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
+    const userId = getUserIdFromRequest(request);
     const body = await request.json();
     const parsed = orderPayloadSchema.safeParse(body);
 
@@ -55,12 +63,33 @@ export async function POST(request: NextRequest) {
       return {
         productId: item.productId,
         quantity: item.quantity,
-        unitPrice
+        unitPrice,
+        selectedSize: item.selectedSize || null,
+        engravingText: item.engravingText || null
       };
     });
 
+    let discountAmount = 0;
+    if (parsed.data.couponCode) {
+      const coupon = await prisma.coupon.findUnique({
+        where: { code: parsed.data.couponCode.toUpperCase() }
+      });
+
+      if (!coupon || !isCouponActive(coupon)) {
+        return NextResponse.json({ message: "Coupon is invalid or expired." }, { status: 400 });
+      }
+
+      discountAmount = computeCouponDiscount(coupon, subtotal);
+      if (discountAmount > 0) {
+        await prisma.coupon.update({
+          where: { id: coupon.id },
+          data: { usedCount: { increment: 1 } }
+        });
+      }
+    }
+
     const shippingFee = subtotal > 100000 ? 0 : 499;
-    const total = subtotal + shippingFee;
+    const total = subtotal + shippingFee - discountAmount;
 
     const order = await prisma.$transaction(async (tx) => {
       for (const item of normalizedItems) {
@@ -86,14 +115,26 @@ export async function POST(request: NextRequest) {
       return tx.order.create({
         data: {
           orderNumber: generateOrderNumber(),
+          trackingId: generateTrackingId(),
           customerName: parsed.data.customerName,
           email: parsed.data.email,
           phone: parsed.data.phone,
           shippingAddress: parsed.data.shippingAddress,
+          userId: userId || null,
+          couponCode: parsed.data.couponCode?.toUpperCase() || null,
+          discountAmount,
+          paymentPlan: parsed.data.paymentPlan || "FULL",
           subtotal,
           shippingFee,
           total,
           status: "PENDING",
+          trackingEvents: [
+            {
+              status: "PENDING",
+              at: new Date().toISOString(),
+              note: "Order placed and awaiting payment confirmation."
+            }
+          ],
           items: {
             create: normalizedItems
           }

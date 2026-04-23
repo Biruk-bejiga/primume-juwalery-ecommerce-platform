@@ -13,7 +13,15 @@ type AdminFormState = {
   collection: string;
   metal: string;
   gemstone: string;
+  gender: string;
+  occasion: string;
   caratWeight: string;
+  sizeOptions: string;
+  metalColorOptions: string;
+  customizationList: string;
+  allowEngraving: boolean;
+  allowSizeAdjustment: boolean;
+  customizationNotes: string;
   price: string;
   makingCharge: string;
   discountPercent: string;
@@ -26,6 +34,51 @@ type AdminFormState = {
   videoThumbnail: string;
 };
 
+type AdminOrder = {
+  id: number;
+  orderNumber: string;
+  customerName: string;
+  email: string;
+  status: "PENDING" | "PAID" | "SHIPPED" | "DELIVERED" | "CANCELLED";
+  total: number;
+  createdAt: string;
+  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PAID" | "FAILED";
+};
+
+type AdminCustomer = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  _count: {
+    orders: number;
+    addresses: number;
+    wishlist: number;
+    customOrders: number;
+  };
+};
+
+type AdminCoupon = {
+  id: number;
+  code: string;
+  type: "PERCENT" | "FLAT";
+  value: number;
+  isActive: boolean;
+  usedCount: number;
+};
+
+type AdminCampaign = {
+  id: number;
+  name: string;
+  channel: string;
+  budget: number;
+  spent: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  isActive: boolean;
+};
+
 const initialFormState: AdminFormState = {
   name: "",
   slug: "",
@@ -34,7 +87,15 @@ const initialFormState: AdminFormState = {
   collection: "",
   metal: "",
   gemstone: "",
+  gender: "",
+  occasion: "",
   caratWeight: "",
+  sizeOptions: "",
+  metalColorOptions: "",
+  customizationList: "",
+  allowEngraving: false,
+  allowSizeAdjustment: false,
+  customizationNotes: "",
   price: "",
   makingCharge: "0",
   discountPercent: "0",
@@ -46,6 +107,17 @@ const initialFormState: AdminFormState = {
   videoUrl: "",
   videoThumbnail: ""
 };
+
+function parseCsv(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function csvFromArray(values: string[]) {
+  return values.join(", ");
+}
 
 function toPayload(form: AdminFormState) {
   const media = [
@@ -81,7 +153,19 @@ function toPayload(form: AdminFormState) {
     collection: form.collection,
     metal: form.metal,
     gemstone: form.gemstone || null,
+    gender: form.gender || null,
+    occasion: form.occasion || null,
     caratWeight: form.caratWeight ? Number(form.caratWeight) : null,
+    variantOptions: {
+      sizes: parseCsv(form.sizeOptions),
+      metalColors: parseCsv(form.metalColorOptions),
+      customization: parseCsv(form.customizationList)
+    },
+    customizationOptions: {
+      allowEngraving: form.allowEngraving,
+      allowSizeAdjustment: form.allowSizeAdjustment,
+      notes: form.customizationNotes || null
+    },
     price: Number(form.price),
     makingCharge: Number(form.makingCharge),
     discountPercent: Number(form.discountPercent),
@@ -104,7 +188,15 @@ function mapToForm(product: ProductView): AdminFormState {
     collection: product.collection,
     metal: product.metal,
     gemstone: product.gemstone || "",
+    gender: product.gender || "",
+    occasion: csvFromArray(product.occasions),
     caratWeight: product.caratWeight ? String(product.caratWeight) : "",
+    sizeOptions: csvFromArray(product.variantOptions.sizes),
+    metalColorOptions: csvFromArray(product.variantOptions.metalColors),
+    customizationList: csvFromArray(product.variantOptions.customization),
+    allowEngraving: product.customizationOptions.allowEngraving,
+    allowSizeAdjustment: product.customizationOptions.allowSizeAdjustment,
+    customizationNotes: product.customizationOptions.notes || "",
     price: String(product.price),
     makingCharge: String(product.makingCharge),
     discountPercent: String(product.discountPercent),
@@ -125,6 +217,26 @@ export default function AdminPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
+  const [customers, setCustomers] = useState<AdminCustomer[]>([]);
+  const [coupons, setCoupons] = useState<AdminCoupon[]>([]);
+  const [campaigns, setCampaigns] = useState<AdminCampaign[]>([]);
+  const [analytics, setAnalytics] = useState<{
+    totalOrders: number;
+    totalUsers: number;
+    grossRevenue: number;
+    paidRevenue: number;
+    averageOrderValue: number;
+    paymentSuccessRate: number;
+    ctr: number;
+    conversionRate: number;
+  } | null>(null);
+  const [couponCode, setCouponCode] = useState("");
+  const [couponType, setCouponType] = useState<"PERCENT" | "FLAT">("PERCENT");
+  const [couponValue, setCouponValue] = useState("10");
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignChannel, setCampaignChannel] = useState("Instagram");
+  const [campaignBudget, setCampaignBudget] = useState("100000");
 
   useEffect(() => {
     const saved = window.localStorage.getItem("admin_api_key");
@@ -160,11 +272,127 @@ export default function AdminPage() {
     }
   }, [apiKey]);
 
+  const fetchAdminData = useCallback(async () => {
+    if (!apiKey) {
+      return;
+    }
+
+    const headers = { "x-admin-key": apiKey };
+
+    const [ordersResponse, customersResponse, couponsResponse, campaignsResponse, analyticsResponse] =
+      await Promise.all([
+        fetch("/api/admin/orders", { headers }),
+        fetch("/api/admin/customers", { headers }),
+        fetch("/api/admin/coupons", { headers }),
+        fetch("/api/admin/campaigns", { headers }),
+        fetch("/api/admin/analytics", { headers })
+      ]);
+
+    const ordersData = (await ordersResponse.json()) as { orders?: AdminOrder[] };
+    const customersData = (await customersResponse.json()) as { customers?: AdminCustomer[] };
+    const couponsData = (await couponsResponse.json()) as { coupons?: AdminCoupon[] };
+    const campaignsData = (await campaignsResponse.json()) as { campaigns?: AdminCampaign[] };
+    const analyticsData = (await analyticsResponse.json()) as { summary?: typeof analytics };
+
+    setOrders(ordersData.orders || []);
+    setCustomers(customersData.customers || []);
+    setCoupons(couponsData.coupons || []);
+    setCampaigns(campaignsData.campaigns || []);
+    setAnalytics((analyticsData.summary as NonNullable<typeof analytics>) || null);
+  }, [apiKey]);
+
   useEffect(() => {
     if (apiKey) {
       void fetchProducts();
+      void fetchAdminData();
     }
-  }, [apiKey, fetchProducts]);
+  }, [apiKey, fetchProducts, fetchAdminData]);
+
+  const createCoupon = async () => {
+    if (!apiKey) {
+      setStatus("Enter admin API key first.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/coupons", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": apiKey
+      },
+      body: JSON.stringify({
+        code: couponCode,
+        type: couponType,
+        value: Number(couponValue),
+        minOrder: 0,
+        isActive: true
+      })
+    });
+
+    const data = (await response.json()) as { message?: string };
+    if (!response.ok) {
+      setStatus(data.message || "Failed to create coupon.");
+      return;
+    }
+
+    setCouponCode("");
+    setCouponValue("10");
+    setStatus("Coupon created.");
+    await fetchAdminData();
+  };
+
+  const createCampaign = async () => {
+    if (!apiKey) {
+      setStatus("Enter admin API key first.");
+      return;
+    }
+
+    const response = await fetch("/api/admin/campaigns", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": apiKey
+      },
+      body: JSON.stringify({
+        name: campaignName,
+        channel: campaignChannel,
+        budget: Number(campaignBudget)
+      })
+    });
+
+    const data = (await response.json()) as { message?: string };
+    if (!response.ok) {
+      setStatus(data.message || "Failed to create campaign.");
+      return;
+    }
+
+    setCampaignName("");
+    setCampaignBudget("100000");
+    setStatus("Campaign created.");
+    await fetchAdminData();
+  };
+
+  const updateOrderStatus = async (orderId: number, statusValue: AdminOrder["status"]) => {
+    if (!apiKey) {
+      return;
+    }
+
+    const response = await fetch("/api/admin/orders", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": apiKey
+      },
+      body: JSON.stringify({
+        orderId,
+        status: statusValue
+      })
+    });
+
+    if (response.ok) {
+      await fetchAdminData();
+    }
+  };
 
   const resetForm = () => {
     setForm(initialFormState);
@@ -365,12 +593,66 @@ export default function AdminPage() {
             />
           </label>
           <label className="space-y-1 text-sm">
+            <span>Gender</span>
+            <input
+              value={form.gender}
+              onChange={(event) => setForm((prev) => ({ ...prev, gender: event.target.value }))}
+              placeholder="Women, Men, Unisex"
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>Occasion tags (comma separated)</span>
+            <input
+              value={form.occasion}
+              onChange={(event) => setForm((prev) => ({ ...prev, occasion: event.target.value }))}
+              placeholder="Wedding, Engagement, Party"
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
             <span>Carat weight</span>
             <input
               type="number"
               step="0.01"
               value={form.caratWeight}
               onChange={(event) => setForm((prev) => ({ ...prev, caratWeight: event.target.value }))}
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>Sizes (comma separated)</span>
+            <input
+              value={form.sizeOptions}
+              onChange={(event) => setForm((prev) => ({ ...prev, sizeOptions: event.target.value }))}
+              placeholder="6, 7, 8"
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>Metal colors (comma separated)</span>
+            <input
+              value={form.metalColorOptions}
+              onChange={(event) => setForm((prev) => ({ ...prev, metalColorOptions: event.target.value }))}
+              placeholder="Rose Gold, Yellow Gold"
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+            />
+          </label>
+          <label className="space-y-1 text-sm md:col-span-2">
+            <span>Customization options (comma separated)</span>
+            <input
+              value={form.customizationList}
+              onChange={(event) => setForm((prev) => ({ ...prev, customizationList: event.target.value }))}
+              placeholder="Name engraving, Birthstone setting"
+              className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+            />
+          </label>
+          <label className="space-y-1 text-sm md:col-span-2">
+            <span>Customization notes</span>
+            <input
+              value={form.customizationNotes}
+              onChange={(event) => setForm((prev) => ({ ...prev, customizationNotes: event.target.value }))}
+              placeholder="Custom orders are processed in 10-12 business days"
               className="w-full rounded-xl border border-amber-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
             />
           </label>
@@ -481,6 +763,24 @@ export default function AdminPage() {
             />
             Active
           </label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.allowEngraving}
+              onChange={(event) => setForm((prev) => ({ ...prev, allowEngraving: event.target.checked }))}
+            />
+            Engraving available
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.allowSizeAdjustment}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, allowSizeAdjustment: event.target.checked }))
+              }
+            />
+            Size adjustment available
+          </label>
         </div>
 
         <button
@@ -503,6 +803,7 @@ export default function AdminPage() {
               <tr className="border-b border-amber-100 text-left text-ink/55">
                 <th className="py-3">Name</th>
                 <th className="py-3">Collection</th>
+                <th className="py-3">Gender</th>
                 <th className="py-3">Price</th>
                 <th className="py-3">Stock</th>
                 <th className="py-3">Status</th>
@@ -514,6 +815,7 @@ export default function AdminPage() {
                 <tr key={product.id} className="border-b border-amber-50">
                   <td className="py-3 font-semibold text-ink">{product.name}</td>
                   <td className="py-3 text-ink/70">{product.collection}</td>
+                  <td className="py-3 text-ink/70">{product.gender || "-"}</td>
                   <td className="py-3 text-ink/70">{formatINR(product.finalPrice)}</td>
                   <td className="py-3 text-ink/70">{product.stock}</td>
                   <td className="py-3">
@@ -553,6 +855,164 @@ export default function AdminPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-amber-100 bg-white p-6">
+        <h2 className="font-display text-3xl text-ink">Order management</h2>
+        <div className="mt-4 space-y-3">
+          {orders.slice(0, 12).map((order) => (
+            <div key={order.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-100 p-4 text-sm">
+              <div>
+                <p className="font-semibold text-ink">{order.orderNumber}</p>
+                <p className="text-ink/60">{order.customerName} • {order.email}</p>
+                <p className="text-ink/60">{formatINR(order.total)} • Payment: {order.paymentStatus}</p>
+              </div>
+              <select
+                value={order.status}
+                onChange={(event) => void updateOrderStatus(order.id, event.target.value as AdminOrder["status"])}
+                className="rounded-xl border border-amber-200 px-3 py-2"
+                aria-label="Update order status"
+              >
+                <option value="PENDING">PENDING</option>
+                <option value="PAID">PAID</option>
+                <option value="SHIPPED">SHIPPED</option>
+                <option value="DELIVERED">DELIVERED</option>
+                <option value="CANCELLED">CANCELLED</option>
+              </select>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-amber-100 bg-white p-6">
+        <h2 className="font-display text-3xl text-ink">Customer database</h2>
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[760px] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-amber-100 text-left text-ink/55">
+                <th className="py-3">Name</th>
+                <th className="py-3">Email</th>
+                <th className="py-3">Phone</th>
+                <th className="py-3">Orders</th>
+                <th className="py-3">Addresses</th>
+                <th className="py-3">Wishlist</th>
+              </tr>
+            </thead>
+            <tbody>
+              {customers.slice(0, 25).map((customer) => (
+                <tr key={customer.id} className="border-b border-amber-50">
+                  <td className="py-3 font-semibold text-ink">{customer.name}</td>
+                  <td className="py-3 text-ink/70">{customer.email}</td>
+                  <td className="py-3 text-ink/70">{customer.phone || "-"}</td>
+                  <td className="py-3 text-ink/70">{customer._count.orders}</td>
+                  <td className="py-3 text-ink/70">{customer._count.addresses}</td>
+                  <td className="py-3 text-ink/70">{customer._count.wishlist}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-3xl border border-amber-100 bg-white p-6">
+          <h2 className="font-display text-3xl text-ink">Offers</h2>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <input
+              placeholder="Coupon code"
+              value={couponCode}
+              onChange={(event) => setCouponCode(event.target.value.toUpperCase())}
+              className="rounded-xl border border-amber-200 px-3 py-2 text-sm"
+            />
+            <select
+              value={couponType}
+              onChange={(event) => setCouponType(event.target.value as "PERCENT" | "FLAT")}
+              className="rounded-xl border border-amber-200 px-3 py-2 text-sm"
+              aria-label="Coupon type"
+            >
+              <option value="PERCENT">Percent</option>
+              <option value="FLAT">Flat</option>
+            </select>
+            <input
+              type="number"
+              placeholder="Value"
+              value={couponValue}
+              onChange={(event) => setCouponValue(event.target.value)}
+              className="rounded-xl border border-amber-200 px-3 py-2 text-sm"
+            />
+          </div>
+          <button onClick={() => void createCoupon()} className="mt-3 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
+            Create coupon
+          </button>
+
+          <div className="mt-4 space-y-2">
+            {coupons.slice(0, 10).map((coupon) => (
+              <div key={coupon.id} className="rounded-xl border border-amber-100 p-3 text-sm">
+                <p className="font-semibold text-ink">{coupon.code}</p>
+                <p className="text-ink/60">{coupon.type} • {coupon.value} • Used {coupon.usedCount}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-amber-100 bg-white p-6">
+          <h2 className="font-display text-3xl text-ink">Campaign management</h2>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <input
+              placeholder="Campaign name"
+              value={campaignName}
+              onChange={(event) => setCampaignName(event.target.value)}
+              className="rounded-xl border border-amber-200 px-3 py-2 text-sm"
+            />
+            <input
+              placeholder="Channel"
+              value={campaignChannel}
+              onChange={(event) => setCampaignChannel(event.target.value)}
+              className="rounded-xl border border-amber-200 px-3 py-2 text-sm"
+            />
+            <input
+              type="number"
+              placeholder="Budget"
+              value={campaignBudget}
+              onChange={(event) => setCampaignBudget(event.target.value)}
+              className="rounded-xl border border-amber-200 px-3 py-2 text-sm"
+            />
+          </div>
+          <button onClick={() => void createCampaign()} className="mt-3 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
+            Create campaign
+          </button>
+
+          <div className="mt-4 space-y-2">
+            {campaigns.slice(0, 10).map((campaign) => (
+              <div key={campaign.id} className="rounded-xl border border-amber-100 p-3 text-sm">
+                <p className="font-semibold text-ink">{campaign.name}</p>
+                <p className="text-ink/60">{campaign.channel} • Budget {formatINR(campaign.budget)} • Spent {formatINR(campaign.spent)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-amber-100 bg-white p-6">
+        <h2 className="font-display text-3xl text-ink">Analytics & reports</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl border border-amber-100 p-4">
+            <p className="text-xs uppercase text-ink/55">Gross revenue</p>
+            <p className="mt-1 text-xl font-bold text-ink">{formatINR(analytics?.grossRevenue || 0)}</p>
+          </div>
+          <div className="rounded-2xl border border-amber-100 p-4">
+            <p className="text-xs uppercase text-ink/55">Paid revenue</p>
+            <p className="mt-1 text-xl font-bold text-ink">{formatINR(analytics?.paidRevenue || 0)}</p>
+          </div>
+          <div className="rounded-2xl border border-amber-100 p-4">
+            <p className="text-xs uppercase text-ink/55">AOV</p>
+            <p className="mt-1 text-xl font-bold text-ink">{formatINR(analytics?.averageOrderValue || 0)}</p>
+          </div>
+          <div className="rounded-2xl border border-amber-100 p-4">
+            <p className="text-xs uppercase text-ink/55">Payment success</p>
+            <p className="mt-1 text-xl font-bold text-ink">{analytics?.paymentSuccessRate || 0}%</p>
+          </div>
         </div>
       </section>
     </div>
